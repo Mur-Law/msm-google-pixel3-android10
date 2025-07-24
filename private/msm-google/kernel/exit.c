@@ -55,6 +55,10 @@
 #include <linux/shm.h>
 #include <linux/kcov.h>
 
+//add
+#include <linux/app_monitor.h>
+//add
+
 #include "sched/tune.h"
 
 #include <asm/uaccess.h>
@@ -742,9 +746,28 @@ static inline void check_stack_usage(void) {}
 
 void __noreturn do_exit(long code)
 {
+	//add
+	// char comm[TASK_COMM_LEN];
+	//add
 	struct task_struct *tsk = current;
 	int group_dead;
 	TASKS_RCU(int tasks_rcu_i);
+
+	/*add 应用监控：处理进程退出 */
+    if (app_monitor_is_monitored_process_group()) {
+        if (current->pid == current->tgid) {
+            /* 主进程退出，清理整个监控条目 */
+            printk(KERN_INFO "hhh7 APP_MAIN_EXIT: pid=%d tgid=%d comm=%s exit_code=%ld\n",
+                   current->pid, current->tgid, current->comm, code);
+            app_monitor_remove_process_group(current->tgid);
+        } else {
+            /* 子线程退出，只记录 */
+            printk(KERN_INFO "hhh7 APP_THREAD_EXIT: pid=%d tgid=%d comm=%s exit_code=%ld\n",
+                   current->pid, current->tgid, current->comm, code);
+        }
+    }
+	//add
+
 
 	profile_task_exit(tsk);
 	kcov_task_exit(tsk);
@@ -766,6 +789,13 @@ void __noreturn do_exit(long code)
 	set_fs(USER_DS);
 
 	ptrace_event(PTRACE_EVENT_EXIT, code);
+
+	// add 添加调试信息
+	// if (tsk->cred->uid.val == 10235) {
+	// 	get_task_comm(comm, tsk);
+	// 	printk(KERN_INFO "Process exit: PID=%d UID=%d COMM=%s\n", tsk->pid, tsk->cred->uid.val, comm);
+	// }
+	//add
 
 	validate_creds_for_do_exit(tsk);
 

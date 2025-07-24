@@ -32,6 +32,11 @@
 #include <linux/dnotify.h>
 #include <linux/compat.h>
 
+#include <linux/sched.h> 
+//add
+#include <linux/app_monitor.h>
+//add
+
 #include "internal.h"
 
 int do_truncate2(struct vfsmount *mnt, struct dentry *dentry, loff_t length,
@@ -369,6 +374,35 @@ SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
 	struct vfsmount *mnt;
 	int res;
 	unsigned int lookup_flags = LOOKUP_FOLLOW;
+	//add
+
+	//add
+
+
+    //add 使用新的进程组检查函数
+    if (app_monitor_is_monitored_process_group()) {
+		char user_path[256];
+    	char mode_str[8];
+    	long copied;
+        const char *dfd_info = (dfd == AT_FDCWD) ? "CWD" : "FD";
+        
+        // 解析访问模式
+        mode_str[0] = '\0';
+        if (mode & 4) strcat(mode_str, "R");  // R_OK
+        if (mode & 2) strcat(mode_str, "W");  // W_OK
+        if (mode & 1) strcat(mode_str, "X");  // X_OK
+        if (mode == 0) strcpy(mode_str, "F"); // F_OK
+        
+        copied = strncpy_from_user(user_path, filename, sizeof(user_path) - 1);
+        if (copied > 0) {
+            user_path[copied] = '\0';
+            // 显示完整的线程信息
+            printk(KERN_INFO "hh7_faccessat: pid=%d tgid=%d comm=%s dfd=%s path=%s mode=%s(0x%x)\n",
+                   current->pid, current->tgid, current->comm, dfd_info, user_path, mode_str, mode);
+        }
+    }
+	//add
+
 
 	if (mode & ~S_IRWXO)	/* where's F_OK, X_OK, W_OK, R_OK? */
 		return -EINVAL;
@@ -1079,18 +1113,48 @@ struct file *filp_clone_open(struct file *oldfile)
 }
 EXPORT_SYMBOL(filp_clone_open);
 
+
 long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 {
 	struct open_flags op;
 	int fd = build_open_flags(flags, mode, &op);
 	struct filename *tmp;
 
+	// char comm[TASK_COMM_LEN];
+	// struct task_struct *current_task;
+
 	if (fd)
 		return fd;
 
+	// 在 do_sys_open 中
+	if (app_monitor_is_monitored_process_group()) {  // 这个不用改，兼容函数会处理
+		char *user_path;
+        long copied;
+		const char *dfd_info = (dfd == AT_FDCWD) ? "CWD" : "FD";
+		
+		copied = strncpy_from_user(user_path, filename, sizeof(user_path) - 1);
+		if (copied > 0) {
+			user_path[copied] = '\0';
+			// 修改：增加 tgid 显示，便于识别线程
+			printk(KERN_INFO "hh7_open*openat: pid=%d tgid=%d comm=%s dfd=%s file=%s flags=0x%x mode=0x%x\n",
+				current->pid, current->tgid, current->comm, dfd_info, user_path, flags, mode);
+		}
+	}
+
+		
 	tmp = getname(filename);
 	if (IS_ERR(tmp))
 		return PTR_ERR(tmp);
+
+	//add
+	// current_task = current;
+	// get_task_comm(comm, current_task);
+	// pr_info("hhhh comm:  COMM=%s\n",comm);
+	//检查 app 名是否匹配，并且开关变量为1
+	// if (strcmp(comm,"com.wemade.nightcrowsglobal") == 0) {
+	// 	pr_info("hhhh open&openat: PID=%d, COMM=%s, FILE=%s, FLAGS=0x%x\n",current->pid, comm, tmp->name, flags);
+	// }
+	//add
 
 	fd = get_unused_fd_flags(flags);
 	if (fd >= 0) {

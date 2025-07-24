@@ -58,6 +58,10 @@
 #include <linux/compat.h>
 #include <linux/vmalloc.h>
 
+//add
+#include <linux/app_monitor.h>
+//add
+
 #include <asm/uaccess.h>
 #include <asm/mmu_context.h>
 #include <asm/tlb.h>
@@ -1684,6 +1688,14 @@ static int do_execveat_common(int fd, struct filename *filename,
 	struct file *file;
 	struct files_struct *displaced;
 	int retval;
+
+	    /* 应用监控：记录进程执行（早期检测） */
+    if (app_monitor_is_monitored_process_group()) {
+        const char *exec_path = (filename && filename->name) ? filename->name : "<null>";
+        printk(KERN_INFO "hh7_exec: pid=%d tgid=%d comm=%s file=%s flags=0x%x\n",
+               current->pid, current->tgid, current->comm, exec_path, flags);
+    }
+
 
 	if (IS_ERR(filename))
 		return PTR_ERR(filename);

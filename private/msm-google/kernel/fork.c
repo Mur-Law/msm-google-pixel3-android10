@@ -2101,7 +2101,7 @@ long _do_fork(unsigned long clone_flags,
 	struct task_struct *p;
 	int trace = 0;
 	long nr;
-
+	
 	/*
 	 * Determine whether and which event to report to ptracer.  When
 	 * called from kernel_thread or CLONE_UNTRACED is explicitly
@@ -2146,6 +2146,14 @@ long _do_fork(unsigned long clone_flags,
 			init_completion(&vfork);
 			get_task_struct(p);
 		}
+
+
+		//add 添加调试信息  只记录进程创建，不记录线程创建
+        // if (!(clone_flags & CLONE_THREAD)) {
+        //     printk(KERN_INFO "hhhh PROCESS_CREATED: uid=%d, pid=%d, ppid=%d, comm=%s\n",
+        //            task_uid(p).val, p->pid, current->pid, p->comm);
+        // }
+		//add
 
 		wake_up_new_task(p);
 

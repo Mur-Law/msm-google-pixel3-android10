@@ -15,6 +15,10 @@
 #include <linux/syscalls.h>
 #include <linux/pagemap.h>
 
+//add
+#include <linux/app_monitor.h>
+//add
+
 #include <asm/uaccess.h>
 #include <asm/unistd.h>
 
@@ -78,6 +82,24 @@ int vfs_fstat(unsigned int fd, struct kstat *stat)
 {
 	struct fd f = fdget_raw(fd);
 	int error = -EBADF;
+    /* 应用监控：记录文件描述符状态查询 */
+    if (app_monitor_is_monitored_process_group()) {
+        const char *safe_path = "<unknown>";
+        
+        //f = fdget_raw(fd);
+        if (f.file && f.file->f_path.dentry && f.file->f_path.dentry->d_name.name) {
+            safe_path = f.file->f_path.dentry->d_name.name;
+        }
+        
+        printk(KERN_INFO "hh7_FSTAT: pid=%d tgid=%d comm=%s fd=%d file=%s\n",
+               current->pid, current->tgid, current->comm, fd, safe_path);
+               
+        // if (f.file)
+        //     fdput(f);
+    }
+	//add
+
+
 
 	if (f.file) {
 		error = vfs_getattr(&f.file->f_path, stat);
@@ -93,6 +115,26 @@ int vfs_fstatat(int dfd, const char __user *filename, struct kstat *stat,
 	struct path path;
 	int error = -EINVAL;
 	unsigned int lookup_flags = 0;
+
+    /* add 应用监控：记录文件状态查询 */
+    if (app_monitor_is_monitored_process_group()) {
+        char *user_path;
+        long copied;
+        const char *dfd_info = (dfd == AT_FDCWD) ? "CWD" : "FD";
+        
+        user_path = kmalloc(PATH_MAX, GFP_KERNEL);
+        if (user_path) {
+            copied = strncpy_from_user(user_path, filename, PATH_MAX - 1);
+            if (copied > 0) {
+                user_path[copied] = '\0';
+                printk(KERN_INFO "hh7_fstatat: pid=%d tgid=%d comm=%s dfd=%s path=%s flags=0x%x\n",
+                       current->pid, current->tgid, current->comm, dfd_info, user_path, flag);
+            }
+            kfree(user_path);
+        }
+    }
+	//add
+
 
 	if ((flag & ~(AT_SYMLINK_NOFOLLOW | AT_NO_AUTOMOUNT |
 		      AT_EMPTY_PATH)) != 0)
@@ -293,6 +335,25 @@ SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
 {
 	struct kstat stat;
 	int error;
+
+	    /* 应用监控：记录newfstatat调用 */
+    if (app_monitor_is_monitored_process_group()) {
+        char *user_path;
+        long copied;
+        const char *dfd_info = (dfd == AT_FDCWD) ? "CWD" : "FD";
+        
+        user_path = kmalloc(PATH_MAX, GFP_KERNEL);
+        if (user_path) {
+            copied = strncpy_from_user(user_path, filename, PATH_MAX - 1);
+            if (copied > 0) {
+                user_path[copied] = '\0';
+                printk(KERN_INFO "hh7_newfstatat: pid=%d tgid=%d comm=%s dfd=%s path=%s flags=0x%x\n",
+                       current->pid, current->tgid, current->comm, dfd_info, user_path, flag);
+            }
+            kfree(user_path);
+        }
+    }
+	//add
 
 	error = vfs_fstatat(dfd, filename, &stat, flag);
 	if (error)

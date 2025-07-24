@@ -66,6 +66,10 @@
 #include <asm/io.h>
 #include <asm/unistd.h>
 
+//add
+#include <linux/app_monitor.h> 
+//add
+
 #ifndef SET_UNALIGN_CTL
 # define SET_UNALIGN_CTL(a, b)	(-EINVAL)
 #endif
@@ -2296,6 +2300,28 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 		if (strncpy_from_user(comm, (char __user *)arg2,
 				      sizeof(me->comm) - 1) < 0)
 			return -EFAULT;
+
+		//add 添加日志：记录进程名称变化
+		// 检查是否是目标应用的主进程命名（从 main 变为应用名）
+		if (app_monitor_is_target(me->comm, comm)) {
+		printk(KERN_INFO "hhh TARGET_APP_MAIN: pid=%d tgid=%d old=%s new=%s ppid=%d\n",
+			me->pid, me->tgid, me->comm, comm,me->parent ? me->parent->pid : 0);
+
+		// 添加整个进程组到监控列表  使用 me->tgid 作为进程组标识符
+		app_monitor_add_process_group(me->tgid);
+		}
+		// 检查是否是已监控进程组中的线程重命名
+		else if (app_monitor_is_monitored_process_group()) {
+		printk(KERN_INFO "hhh TARGET_APP_THREAD: pid=%d tgid=%d old=%s new=%s\n",
+			me->pid, me->tgid, me->comm, comm);
+		// 注意：子线程的命名不需要添加到监控列表
+		// 因为它们共享主进程的TGID，已经被覆盖了
+		}
+
+		// printk(KERN_INFO "hhhh2 PRCTL_RENAME: pid=%d uid=%d old_comm=%s new_comm=%s ppid=%d\n",
+		// 	me->pid, task_uid(me).val, me->comm, comm, me->parent ? me->parent->pid : 0);	
+		//add	
+
 		set_task_comm(me, comm);
 		proc_comm_connector(me);
 		break;
