@@ -374,33 +374,37 @@ SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)
 	struct vfsmount *mnt;
 	int res;
 	unsigned int lookup_flags = LOOKUP_FOLLOW;
-	//add
 
-	//add
-
-
-    //add 使用新的进程组检查函数
-    if (app_monitor_is_monitored_process_group()) {
+	/* 应用监控：安全记录文件访问检查 */
+	if (app_monitor_is_monitored_process_group()) {
 		char user_path[256];
-    	char mode_str[8];
-    	long copied;
-        const char *dfd_info = (dfd == AT_FDCWD) ? "CWD" : "FD";
-        
-        // 解析访问模式
-        mode_str[0] = '\0';
-        if (mode & 4) strcat(mode_str, "R");  // R_OK
-        if (mode & 2) strcat(mode_str, "W");  // W_OK
-        if (mode & 1) strcat(mode_str, "X");  // X_OK
-        if (mode == 0) strcpy(mode_str, "F"); // F_OK
-        
-        copied = strncpy_from_user(user_path, filename, sizeof(user_path) - 1);
-        if (copied > 0) {
-            user_path[copied] = '\0';
-            // 显示完整的线程信息
-            printk(KERN_INFO "hh7_faccessat: pid=%d tgid=%d comm=%s dfd=%s path=%s mode=%s(0x%x)\n",
-                   current->pid, current->tgid, current->comm, dfd_info, user_path, mode_str, mode);
-        }
-    }
+		char mode_str[8] = {0};  /* 初始化为全0 */
+		char safe_comm[TASK_COMM_LEN];
+		long copied;
+		const char *dfd_info = (dfd == AT_FDCWD) ? "CWD" : "FD";
+		
+		/* 安全获取进程名 */
+		get_task_comm(safe_comm, current);
+		
+		/* 安全解析访问模式 */
+		if (mode & 4) strcat(mode_str, "R");  /* R_OK */
+		if (mode & 2) strcat(mode_str, "W");  /* W_OK */
+		if (mode & 1) strcat(mode_str, "X");  /* X_OK */
+		if (mode == 0) strcpy(mode_str, "F"); /* F_OK */
+		
+		/* 安全复制用户路径 */
+		copied = strncpy_from_user(user_path, filename, sizeof(user_path) - 1);
+		if (copied >= 0 && copied < sizeof(user_path)) {
+			user_path[copied] = '\0';
+			/* 使用长度限制防止格式字符串攻击 */
+			printk(KERN_INFO "hh7_faccessat: pid=%d tgid=%d comm=%.15s dfd=%s path=%.200s mode=%s(0x%x)\n",
+				current->pid, current->tgid, safe_comm, dfd_info, user_path, mode_str, mode);
+		} else {
+			/* 处理路径获取失败的情况 */
+			printk(KERN_INFO "hh7_faccessat: pid=%d tgid=%d comm=%.15s dfd=%s path=<invalid> mode=%s(0x%x)\n",
+				current->pid, current->tgid, safe_comm, dfd_info, mode_str, mode);
+		}
+	}
 	//add
 
 
@@ -1126,18 +1130,37 @@ long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 	if (fd)
 		return fd;
 
-	// 在 do_sys_open 中
-	if (app_monitor_is_monitored_process_group()) {  // 这个不用改，兼容函数会处理
-		char *user_path;
-        long copied;
+	/* 应用监控：安全记录文件打开操作 */
+	if (app_monitor_is_monitored_process_group()) {
+		char *user_path = NULL;
+		char safe_comm[TASK_COMM_LEN];
+		long copied;
 		const char *dfd_info = (dfd == AT_FDCWD) ? "CWD" : "FD";
 		
-		copied = strncpy_from_user(user_path, filename, sizeof(user_path) - 1);
-		if (copied > 0) {
-			user_path[copied] = '\0';
-			// 修改：增加 tgid 显示，便于识别线程
-			printk(KERN_INFO "hh7_open*openat: pid=%d tgid=%d comm=%s dfd=%s file=%s flags=0x%x mode=0x%x\n",
-				current->pid, current->tgid, current->comm, dfd_info, user_path, flags, mode);
+				/* 安全获取进程名 */
+		get_task_comm(safe_comm, current);
+		
+		/* 分配内存用于路径复制 */
+		user_path = kmalloc(PATH_MAX, GFP_KERNEL);
+		if (user_path) {
+			/* 安全复制用户路径 */
+			copied = strncpy_from_user(user_path, filename, PATH_MAX - 1);
+			if (copied >= 0 && copied < PATH_MAX) {
+				user_path[copied] = '\0';
+				/* 使用长度限制防止格式字符串攻击 */
+				printk(KERN_INFO "hh7_open: pid=%d tgid=%d comm=%.15s dfd=%s file=%.200s flags=0x%x mode=0x%x\n",
+					current->pid, current->tgid, safe_comm, dfd_info, user_path, flags, mode);
+			} else {
+				/* 处理路径获取失败的情况 */
+				printk(KERN_INFO "hh7_open: pid=%d tgid=%d comm=%.15s dfd=%s file=<invalid> flags=0x%x mode=0x%x\n",
+					current->pid, current->tgid, safe_comm, dfd_info, flags, mode);
+			}
+			kfree(user_path);
+		} else {
+			/* 内存分配失败的处理 */
+			printk(KERN_INFO "hh7_open: pid=%d tgid=%d comm=%.15s dfd=%s file=<nomem> flags=0x%x mode=0x%x\n",
+				current->pid, current->tgid, safe_comm, dfd_info, flags, mode);
+
 		}
 	}
 
@@ -1145,16 +1168,6 @@ long do_sys_open(int dfd, const char __user *filename, int flags, umode_t mode)
 	tmp = getname(filename);
 	if (IS_ERR(tmp))
 		return PTR_ERR(tmp);
-
-	//add
-	// current_task = current;
-	// get_task_comm(comm, current_task);
-	// pr_info("hhhh comm:  COMM=%s\n",comm);
-	//检查 app 名是否匹配，并且开关变量为1
-	// if (strcmp(comm,"com.wemade.nightcrowsglobal") == 0) {
-	// 	pr_info("hhhh open&openat: PID=%d, COMM=%s, FILE=%s, FLAGS=0x%x\n",current->pid, comm, tmp->name, flags);
-	// }
-	//add
 
 	fd = get_unused_fd_flags(flags);
 	if (fd >= 0) {

@@ -138,8 +138,7 @@ void app_monitor_remove_process_group(pid_t main_pid)
                 monitored_pids[j] = monitored_pids[j + 1];
             }
             monitored_count--;
-            printk(KERN_INFO "APP_MONITOR: Removed process group TGID=%d (total: %d)\n", 
-                   main_pid, monitored_count);
+            printk(KERN_INFO "APP_MONITOR: Removed process group TGID=%d (total: %d)\n", main_pid, monitored_count);
             break;
         }
     }

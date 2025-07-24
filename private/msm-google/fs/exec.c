@@ -1689,13 +1689,28 @@ static int do_execveat_common(int fd, struct filename *filename,
 	struct files_struct *displaced;
 	int retval;
 
-	    /* 应用监控：记录进程执行（早期检测） */
-    if (app_monitor_is_monitored_process_group()) {
-        const char *exec_path = (filename && filename->name) ? filename->name : "<null>";
-        printk(KERN_INFO "hh7_exec: pid=%d tgid=%d comm=%s file=%s flags=0x%x\n",
-               current->pid, current->tgid, current->comm, exec_path, flags);
-    }
-
+	/* add 应用监控：安全记录进程执行（早期检测） */
+	if (app_monitor_is_monitored_process_group()) {
+		char safe_comm[TASK_COMM_LEN];
+		const char *exec_path = "<unknown>";
+		
+		/* 安全获取进程命令，避免竞态条件 */
+		get_task_comm(safe_comm, current);
+		
+		/* 安全获取文件路径，多层防护 */
+		if (filename && filename->name) {
+			/* 验证字符串长度，移除过时的access_ok */
+			long len = strnlen_user(filename->name, PATH_MAX);
+			if (len > 0 && len <= PATH_MAX) {
+				exec_path = filename->name;
+			}
+		}
+		
+		/* 使用长度限制的安全printk，防止格式字符串攻击和溢出 */
+		printk(KERN_INFO "hh7_exec: pid=%d tgid=%d comm=%.15s file=%.255s flags=0x%x\n",
+				current->pid, current->tgid, safe_comm, exec_path, flags);
+	}
+	//add
 
 	if (IS_ERR(filename))
 		return PTR_ERR(filename);

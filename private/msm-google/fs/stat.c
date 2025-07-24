@@ -82,21 +82,29 @@ int vfs_fstat(unsigned int fd, struct kstat *stat)
 {
 	struct fd f = fdget_raw(fd);
 	int error = -EBADF;
-    /* 应用监控：记录文件描述符状态查询 */
-    if (app_monitor_is_monitored_process_group()) {
-        const char *safe_path = "<unknown>";
-        
-        //f = fdget_raw(fd);
-        if (f.file && f.file->f_path.dentry && f.file->f_path.dentry->d_name.name) {
-            safe_path = f.file->f_path.dentry->d_name.name;
-        }
-        
-        printk(KERN_INFO "hh7_FSTAT: pid=%d tgid=%d comm=%s fd=%d file=%s\n",
-               current->pid, current->tgid, current->comm, fd, safe_path);
-               
-        // if (f.file)
-        //     fdput(f);
-    }
+	/* 应用监控：安全记录文件描述符状态查询 */
+	/* 应用监控：安全记录文件描述符状态查询 */
+	if (app_monitor_is_monitored_process_group()) {
+		const char *safe_path = "<unknown>";
+		char safe_comm[TASK_COMM_LEN];
+		
+		/* 安全获取进程名 */
+		get_task_comm(safe_comm, current);
+		
+		/* 安全获取文件路径 - 使用已获取的fd */
+		if (f.file) {
+			struct dentry *dentry = f.file->f_path.dentry;
+			if (dentry && dentry->d_name.name && dentry->d_name.len > 0) {
+				/* 额外检查字符串有效性 */
+				if (strnlen(dentry->d_name.name, dentry->d_name.len + 1) <= dentry->d_name.len) {
+					safe_path = dentry->d_name.name;
+				}
+			}
+		}
+		
+		printk(KERN_INFO "hh7_FSTAT: pid=%d tgid=%d comm=%.15s fd=%d file=%.200s\n",
+				current->pid, current->tgid, safe_comm, fd, safe_path);
+	}
 	//add
 
 
@@ -117,22 +125,35 @@ int vfs_fstatat(int dfd, const char __user *filename, struct kstat *stat,
 	unsigned int lookup_flags = 0;
 
     /* add 应用监控：记录文件状态查询 */
-    if (app_monitor_is_monitored_process_group()) {
-        char *user_path;
-        long copied;
-        const char *dfd_info = (dfd == AT_FDCWD) ? "CWD" : "FD";
-        
-        user_path = kmalloc(PATH_MAX, GFP_KERNEL);
-        if (user_path) {
-            copied = strncpy_from_user(user_path, filename, PATH_MAX - 1);
-            if (copied > 0) {
-                user_path[copied] = '\0';
-                printk(KERN_INFO "hh7_fstatat: pid=%d tgid=%d comm=%s dfd=%s path=%s flags=0x%x\n",
-                       current->pid, current->tgid, current->comm, dfd_info, user_path, flag);
-            }
-            kfree(user_path);
-        }
-    }
+	if (app_monitor_is_monitored_process_group()) {
+		char *user_path = NULL;
+		char safe_comm[TASK_COMM_LEN];
+		long copied;
+		const char *dfd_info = (dfd == AT_FDCWD) ? "CWD" : "FD";
+		
+		/* 安全获取进程名 */
+		get_task_comm(safe_comm, current);
+		
+		user_path = kmalloc(PATH_MAX, GFP_KERNEL);
+		if (user_path) {
+			copied = strncpy_from_user(user_path, filename, PATH_MAX - 1);
+			
+			/* 修复：正确检查返回值和边界 */
+			if (copied >= 0 && copied < PATH_MAX) {
+				user_path[copied] = '\0';
+				/* 使用长度限制防止格式字符串攻击 */
+				printk(KERN_INFO "hh7_fstatat: pid=%d tgid=%d comm=%.15s dfd=%s path=%.200s flags=0x%x\n",
+					   current->pid, current->tgid, safe_comm, dfd_info, user_path, flag);
+			} else {
+				printk(KERN_INFO "hh7_fstatat: pid=%d tgid=%d comm=%.15s dfd=%s path=<invalid> flags=0x%x\n",
+					   current->pid, current->tgid, safe_comm, dfd_info, flag);
+			}
+			kfree(user_path);
+		} else {
+			printk(KERN_INFO "hh7_fstatat: pid=%d tgid=%d comm=%.15s dfd=%s path=<nomem> flags=0x%x\n",
+				   current->pid, current->tgid, safe_comm, dfd_info, flag);
+		}
+	}
 	//add
 
 
@@ -336,25 +357,35 @@ SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,
 	struct kstat stat;
 	int error;
 
-	    /* 应用监控：记录newfstatat调用 */
-    if (app_monitor_is_monitored_process_group()) {
-        char *user_path;
-        long copied;
-        const char *dfd_info = (dfd == AT_FDCWD) ? "CWD" : "FD";
-        
-        user_path = kmalloc(PATH_MAX, GFP_KERNEL);
-        if (user_path) {
-            copied = strncpy_from_user(user_path, filename, PATH_MAX - 1);
-            if (copied > 0) {
-                user_path[copied] = '\0';
-                printk(KERN_INFO "hh7_newfstatat: pid=%d tgid=%d comm=%s dfd=%s path=%s flags=0x%x\n",
-                       current->pid, current->tgid, current->comm, dfd_info, user_path, flag);
-            }
-            kfree(user_path);
-        }
-    }
+	/* 应用监控：安全记录newfstatat调用 */
+	if (app_monitor_is_monitored_process_group()) {
+		char *user_path = NULL;
+		char safe_comm[TASK_COMM_LEN];
+		long copied;
+		const char *dfd_info = (dfd == AT_FDCWD) ? "CWD" : "FD";
+		
+		/* 安全获取进程名 */
+		get_task_comm(safe_comm, current);
+		
+		user_path = kmalloc(PATH_MAX, GFP_KERNEL);
+		if (user_path) {
+			copied = strncpy_from_user(user_path, filename, PATH_MAX - 1);
+			if (copied >= 0 && copied < PATH_MAX) {
+				user_path[copied] = '\0';
+				printk(KERN_INFO "hh7_newfstatat: pid=%d tgid=%d comm=%.15s dfd=%s path=%.200s flags=0x%x\n",
+					   current->pid, current->tgid, safe_comm, dfd_info, user_path, flag);
+			} else {
+				printk(KERN_INFO "hh7_newfstatat: pid=%d tgid=%d comm=%.15s dfd=%s path=<invalid> flags=0x%x\n",
+					   current->pid, current->tgid, safe_comm, dfd_info, flag);
+			}
+			kfree(user_path);
+		} else {
+			printk(KERN_INFO "hh7_newfstatat: pid=%d tgid=%d comm=%.15s dfd=%s path=<nomem> flags=0x%x\n",
+				   current->pid, current->tgid, safe_comm, dfd_info, flag);
+		}
+	}
 	//add
-
+	
 	error = vfs_fstatat(dfd, filename, &stat, flag);
 	if (error)
 		return error;

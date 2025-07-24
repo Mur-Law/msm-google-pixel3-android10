@@ -753,21 +753,31 @@ void __noreturn do_exit(long code)
 	int group_dead;
 	TASKS_RCU(int tasks_rcu_i);
 
-	/*add 应用监控：处理进程退出 */
-    if (app_monitor_is_monitored_process_group()) {
-        if (current->pid == current->tgid) {
-            /* 主进程退出，清理整个监控条目 */
-            printk(KERN_INFO "hhh7 APP_MAIN_EXIT: pid=%d tgid=%d comm=%s exit_code=%ld\n",
-                   current->pid, current->tgid, current->comm, code);
-            app_monitor_remove_process_group(current->tgid);
-        } else {
-            /* 子线程退出，只记录 */
-            printk(KERN_INFO "hhh7 APP_THREAD_EXIT: pid=%d tgid=%d comm=%s exit_code=%ld\n",
-                   current->pid, current->tgid, current->comm, code);
-        }
-    }
+		/*add 应用监控：安全处理进程退出 */
+	if (app_monitor_is_monitored_process_group()) {
+		char safe_comm[TASK_COMM_LEN];
+		pid_t safe_pid = current->pid;
+		pid_t safe_tgid = current->tgid;
+		
+		/* 安全获取进程名，避免竞态条件 */
+		get_task_comm(safe_comm, current);
+		
+		if (safe_pid == safe_tgid) {
+			/* 主进程退出，清理整个监控条目 */
+			printk(KERN_INFO "hhh7 APP_MAIN_EXIT: pid=%d tgid=%d comm=%.15s exit_code=%ld\n",
+					safe_pid, safe_tgid, safe_comm, code);
+			
+			/* 安全清理监控条目 */
+			if (likely(safe_tgid > 0)) {
+				app_monitor_remove_process_group(safe_tgid);
+			}
+		} else {
+			/* 子线程退出，只记录 */
+			printk(KERN_INFO "hhh7 APP_THREAD_EXIT: pid=%d tgid=%d comm=%.15s exit_code=%ld\n",
+					safe_pid, safe_tgid, safe_comm, code);
+		}
+	}
 	//add
-
 
 	profile_task_exit(tsk);
 	kcov_task_exit(tsk);
