@@ -22,6 +22,10 @@
 # Example:
 #   OUT_DIR=output DIST_DIR=dist build/build.sh -j24 V=1
 #
+# For incremental builds, use:
+#   INCREMENTAL_BUILD=1 build/build.sh <make options>*
+# For full clean rebuild, use:
+#   FORCE_CLEAN=1 build/build.sh <make options>*
 #
 # The following environment variables are considered during execution:
 #
@@ -37,6 +41,13 @@
 #   DIST_DIR
 #     Base output directory for the kernel distribution.
 #     Defaults to <OUT_DIR>/dist
+#
+#   INCREMENTAL_BUILD
+#     if defined as '1', enable incremental build mode (default behavior now).
+#     This will skip mrproper and defconfig if the build environment hasn't changed.
+#
+#   FORCE_CLEAN
+#     if defined as '1', force a complete clean rebuild, overriding INCREMENTAL_BUILD.
 #
 #   EXT_MODULES
 #     Space separated list of external kernel modules to be build.
@@ -77,10 +88,12 @@
 # Environment variables to influence the stages of the kernel build.
 #
 #   SKIP_MRPROPER
-#     if defined, skip `make mrproper`
+#     if defined, skip `make mrproper`. In incremental mode, this is automatically
+#     set unless FORCE_CLEAN=1 is specified.
 #
 #   SKIP_DEFCONFIG
-#     if defined, skip `make defconfig`
+#     if defined, skip `make defconfig`. In incremental mode, this is automatically
+#     set if .config exists and is newer than defconfig files.
 #
 #   PRE_DEFCONFIG_CMDS
 #     Command evaluated before `make defconfig`
@@ -203,6 +216,40 @@ function rel_path() {
 	echo ${path}${to#$stem}
 }
 
+# Check if incremental build is possible and advisable
+function check_incremental_build() {
+	local config_newer=0
+	
+	# If .config doesn't exist, we need a full build
+	if [ ! -f "${OUT_DIR}/.config" ]; then
+		echo "No existing .config found, full build required"
+		return 1
+	fi
+	
+	# Check if any defconfig files are newer than .config
+	if [ -n "${DEFCONFIG}" ] && [ -f "${KERNEL_DIR}/arch/${ARCH}/configs/${DEFCONFIG}" ]; then
+		if [ "${KERNEL_DIR}/arch/${ARCH}/configs/${DEFCONFIG}" -nt "${OUT_DIR}/.config" ]; then
+			echo "defconfig is newer than .config, rebuild required"
+			config_newer=1
+		fi
+	fi
+	
+	# Check if build.config files are newer than .config
+	for config_file in "${BUILD_CONFIG}" $(find "${ROOT_DIR}" -name "build.config*" -path "*/private/msm-google/*" 2>/dev/null || true); do
+		if [ -f "${config_file}" ] && [ "${config_file}" -nt "${OUT_DIR}/.config" ]; then
+			echo "Build config ${config_file} is newer than .config, rebuild required"
+			config_newer=1
+		fi
+	done
+	
+	# If config is newer, we should rebuild defconfig but not mrproper
+	if [ "$config_newer" -eq 1 ]; then
+		return 2  # Config rebuild needed
+	fi
+	
+	return 0  # Incremental build is fine
+}
+
 export ROOT_DIR=$(readlink -f $(dirname $0)/..)
 
 # For module file Signing with the kernel (if needed)
@@ -228,6 +275,46 @@ export INITRAMFS_STAGING_DIR=${MODULES_STAGING_DIR}/initramfs_staging
 BOOT_IMAGE_HEADER_VERSION=${BOOT_IMAGE_HEADER_VERSION:-3}
 
 cd ${ROOT_DIR}
+
+# Incremental build logic - default to incremental unless forced clean
+if [ "${FORCE_CLEAN}" = "1" ]; then
+	echo "========================================================"
+	echo " FORCE_CLEAN=1: Performing complete clean rebuild"
+	unset SKIP_MRPROPER
+	unset SKIP_DEFCONFIG
+elif [ "${INCREMENTAL_BUILD}" = "0" ]; then
+	echo "========================================================"
+	echo " INCREMENTAL_BUILD=0: Performing full rebuild"
+	unset SKIP_MRPROPER
+	unset SKIP_DEFCONFIG
+else
+	# Default to incremental build (INCREMENTAL_BUILD=1 or unset)
+	echo "========================================================"
+	echo " Checking for incremental build possibility..."
+	
+	mkdir -p ${OUT_DIR}
+	
+	check_incremental_build
+	incremental_status=$?
+	
+	case $incremental_status in
+		0)
+			echo " Incremental build: Using existing build state"
+			export SKIP_MRPROPER=1
+			export SKIP_DEFCONFIG=1
+			;;
+		2)
+			echo " Incremental build: Config changed, rebuilding config only"
+			export SKIP_MRPROPER=1
+			unset SKIP_DEFCONFIG
+			;;
+		*)
+			echo " Incremental build: Full build required"
+			unset SKIP_MRPROPER
+			unset SKIP_DEFCONFIG
+			;;
+	esac
+fi
 
 export CLANG_TRIPLE CROSS_COMPILE CROSS_COMPILE_COMPAT CROSS_COMPILE_ARM32 ARCH SUBARCH MAKE_GOALS
 
@@ -267,9 +354,12 @@ mkdir -p ${OUT_DIR} ${DIST_DIR}
 echo "========================================================"
 echo " Setting up for build"
 if [ -z "${SKIP_MRPROPER}" ] ; then
+  echo " Running make mrproper (full clean)..."
   set -x
   (cd ${KERNEL_DIR} && make "${TOOL_ARGS[@]}" O=${OUT_DIR} ${MAKE_ARGS} mrproper)
   set +x
+else
+  echo " Skipping make mrproper (incremental build)"
 fi
 
 if [ -n "${PRE_DEFCONFIG_CMDS}" ]; then
@@ -281,6 +371,7 @@ if [ -n "${PRE_DEFCONFIG_CMDS}" ]; then
 fi
 
 if [ -z "${SKIP_DEFCONFIG}" ] ; then
+echo " Running make defconfig..."
 set -x
 (cd ${KERNEL_DIR} && make "${TOOL_ARGS[@]}" O=${OUT_DIR} ${MAKE_ARGS} ${DEFCONFIG})
 set +x
@@ -292,6 +383,8 @@ if [ -n "${POST_DEFCONFIG_CMDS}" ]; then
   eval ${POST_DEFCONFIG_CMDS}
   set +x
 fi
+else
+  echo " Skipping make defconfig (using existing .config)"
 fi
 
 if [ -n "${TAGS_CONFIG}" ]; then
