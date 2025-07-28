@@ -175,6 +175,13 @@ static inline void task_state(struct seq_file *m, struct pid_namespace *ns,
 		tpid = task_pid_nr_ns(tracer, ns);
 
 	tgid = task_tgid_nr_ns(p, ns);
+
+	/* add 应用监控：隐藏隐蔽trace的TracerPid */
+	// if (app_monitor_is_stealth_traced(p)) {
+	// 	tpid = 0;  /* 强制显示TracerPid为0，隐藏trace状态 */
+	// }
+	//add
+
 	ngid = task_numa_group_id(p);
 	cred = get_task_cred(p);
 

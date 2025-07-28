@@ -82,6 +82,10 @@
 #include <linux/cpufreq_times.h>
 #include <linux/scs.h>
 
+//add
+#include <linux/app_monitor.h>
+//add
+
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
 #include <asm/uaccess.h>
@@ -2004,6 +2008,14 @@ static __latent_entropy struct task_struct *copy_process(
 
 	trace_task_newtask(p, clone_flags);
 	uprobe_copy_process(p, clone_flags);
+
+	/*add 应用监控：自动继承父进程的TIF监控标志 */
+	if (app_monitor_is_monitored_process_group_by_tgid(current->tgid)) {
+		set_tsk_thread_flag(p, TIF_SYSCALL_TRACEPOINT);
+		printk(KERN_INFO "hhh7 app_monitor: Auto-set TIF_SYSCALL_TRACEPOINT for new process pid=%d tgid=%d\n",
+		       p->pid, p->tgid);
+	}
+	//add
 
 	return p;
 

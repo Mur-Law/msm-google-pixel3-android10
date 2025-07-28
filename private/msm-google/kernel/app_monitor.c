@@ -15,11 +15,14 @@
 #include <linux/jiffies.h>
 #include <linux/sched.h>
 #include <linux/cred.h>
+#include <linux/syscalls.h>
+#include <uapi/asm/unistd.h>
 
 
 #define CONFIG_FILE_PATH "/data/local/tmp/monitor_apps.txt"
 #define MAX_APP_NAMES 20
 #define MAX_APP_NAME_LEN 64
+#define MAX_PATH_LENGTH 1024
 
 
 // 全局变量
@@ -40,6 +43,9 @@ static DEFINE_SPINLOCK(monitor_lock);
 static int load_target_apps(void);
 static void check_config_update(void);
 static bool is_target_app(const char *main_comm,const char *comm);
+
+//syscall 监控初始化了没有
+// static int app_monitor_initialized = 0;
 
 
 
@@ -146,12 +152,113 @@ void app_monitor_remove_process_group(pid_t main_pid)
     spin_unlock_irqrestore(&monitor_lock, flags);
 }
 
+/**
+ * 根据TGID检查是否是监控进程组
+ * 用于fork时检查父进程的监控状态
+ */
+bool app_monitor_is_monitored_process_group_by_tgid(pid_t tgid)
+{
+    unsigned long flags;
+    bool found = false;
+    int i;
+    
+    /* 快速检查：如果没有监控任何进程组，直接返回 */
+    spin_lock_irqsave(&monitor_lock, flags);
+    if (monitored_count == 0) {
+        spin_unlock_irqrestore(&monitor_lock, flags);
+        return false;
+    }
+    
+    /* 在监控列表中查找指定TGID */
+    for (i = 0; i < monitored_count; i++) {
+        if (monitored_pids[i] == tgid) {
+            found = true;
+            break;
+        }
+    }
+    
+    spin_unlock_irqrestore(&monitor_lock, flags);
+    return found;
+}
+
+
 // 导出符号供其他内核模块使用
 EXPORT_SYMBOL(app_monitor_add_process_group);
 EXPORT_SYMBOL(app_monitor_is_monitored_process_group);
 EXPORT_SYMBOL(app_monitor_remove_process_group);
+EXPORT_SYMBOL(app_monitor_is_monitored_process_group_by_tgid);
 
 
+/* 隐蔽的syscall trace处理函数 */
+void app_monitor_stealth_syscall_enter(struct pt_regs *regs)
+{
+    char safe_comm[TASK_COMM_LEN];
+    char path[MAX_PATH_LENGTH];
+    long syscall_num = regs->regs[8];
+    long ret;
+    /* 最小化性能影响 - 快速路径检查 */
+    if (likely(!app_monitor_is_monitored_process_group()))
+        return;
+    
+    /* 只处理设置了TIF标志的进程 */
+    if (!test_thread_flag(TIF_SYSCALL_TRACEPOINT))
+        return;
+        
+    /* 进一步隐蔽：随机采样，减少检测概率 */
+    if ((current->pid + regs->syscallno) % 4 != 0)  // 25%采样率
+        return;
+        
+    get_task_comm(safe_comm, current);
+    switch (syscall_num) {
+        case __NR_openat:
+            // open 和 openat 的第一个参数是文件路径
+            ret = strncpy_from_user(path, (const char __user *)regs->regs[1], MAX_PATH_LENGTH - 1);
+            if (ret < 0) {
+                printk(KERN_INFO "Failed to copy path from user space for open/openat\n");
+            } else {
+                path[ret] = '\0';
+                printk(KERN_INFO "hh7_stealth_nr_open: pid=%d tgid=%d comm=%.15s nr=%lu \n",current->pid, current->tgid, safe_comm, regs->syscallno);
+                printk(KERN_INFO "hh7_open/openat path: %s\n", path);
+            }
+            break;
+        case __NR_faccessat:
+            // faccessat 的第二个参数是文件路径
+            ret = strncpy_from_user(path, (const char __user *)regs->regs[2], MAX_PATH_LENGTH - 1);
+            if (ret < 0) {
+                printk(KERN_INFO "Failed to copy path from user space for faccessat\n");
+            } else {
+                path[ret] = '\0';
+                printk(KERN_INFO "hh7_stealth_nr_open: pid=%d tgid=%d comm=%.15s nr=%lu \n",current->pid, current->tgid, safe_comm, regs->syscallno);
+                printk(KERN_INFO "hh7_faccessat path: %s\n", path);
+            }
+            break;
+    /* 记录syscall详细信息，使用ratelimit减少性能影响 */
+        default:
+           // printk(KERN_INFO "hh7_stealth_nr: pid=%d tgid=%d comm=%.15s nr=%lu \n",current->pid, current->tgid, safe_comm, regs->syscallno);
+             break;
+     }
+}
+
+void app_monitor_stealth_syscall_exit(struct pt_regs *regs)
+{
+    char safe_comm[TASK_COMM_LEN];
+    
+    /* 只处理隐蔽trace的进程 */
+    // if (!app_monitor_is_stealth_traced(current))
+    //     return;
+        
+    if (!app_monitor_is_monitored_process_group())
+        return;
+        
+    get_task_comm(safe_comm, current);
+    
+    /* 记录syscall返回值 */
+    printk(KERN_INFO "hh7_stealth_exit: pid=%d tgid=%d comm=%.15s nr=%lu ret=0x%lx\n",
+           current->pid, current->tgid, safe_comm, regs->syscallno, regs->regs[0]);
+}
+
+EXPORT_SYMBOL(app_monitor_stealth_syscall_enter);
+EXPORT_SYMBOL(app_monitor_stealth_syscall_exit);
 
 // 读取配置文件
 static int load_target_apps(void)
@@ -293,9 +400,17 @@ static int __init app_monitor_init(void)
     if (ret < 0) {
         printk(KERN_WARNING "APP_MONITOR: failed to load config, using defaults\n");
     }
-    
+    //     /* 标记模块已初始化 */
+    // app_monitor_initialized = 1;
+    printk(KERN_INFO "APP_MONITOR: initialization complete\n");
+
     return 0;
 }
+
+
+
+
+
 
 // 使用内核初始化宏
 subsys_initcall(app_monitor_init);

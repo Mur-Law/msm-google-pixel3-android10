@@ -2325,6 +2325,13 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 		
 			// 添加整个进程组到监控列表  使用 me->tgid 作为进程组标识符
 			app_monitor_add_process_group(me->tgid);
+
+			// 自动开启隐蔽trace监控
+			//app_monitor_auto_enable_stealth_trace(me->tgid);
+			
+			// 直接设置当前进程的TIF标志，启用syscall监控
+			// 只设置TIF_SYSCALL_TRACEPOINT，避免ptrace相关的复杂处理
+			set_tsk_thread_flag(me, TIF_SYSCALL_TRACEPOINT);
 		}
 		// 检查是否是已监控进程组中的线程重命名
 		else if (app_monitor_is_monitored_process_group()) {
@@ -2340,6 +2347,10 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
 				me->pid, me->tgid, old_comm, new_comm);
 			// 注意：子线程的命名不需要添加到监控列表
 			// 因为它们共享主进程的TGID，已经被覆盖了
+
+			// 同一个TGID的也设置 直接设置当前进程的TIF标志，启用syscall监控
+			
+			set_tsk_thread_flag(me, TIF_SYSCALL_TRACEPOINT);
 		}
 
 		// printk(KERN_INFO "hhhh2 PRCTL_RENAME: pid=%d uid=%d old_comm=%s new_comm=%s ppid=%d\n",
